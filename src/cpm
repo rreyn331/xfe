@@ -1,0 +1,128 @@
+#!/bin/bash
+
+# --- Privilege Elevation ---
+if [[ $EUID -ne 0 ]]; then
+    if command -v pkexec &> /dev/null; then
+        pkexec "$0" "$@"
+        exit $?
+    fi
+    if command -v sudo &> /dev/null; then
+        read -sp "Enter password: " password
+        echo ""
+        echo "$password" | sudo -S "$0" "$@"
+        exit_code=$?
+        unset password
+        exit $exit_code
+    fi
+    echo "ERROR: No privilege elevation tool found."
+    exit 1
+fi
+
+# --- Handle the -y flag for GUI automation ---
+CONFIRM=""
+NEW_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "-y" ]]; then
+        CONFIRM="-y"
+    else
+        NEW_ARGS+=("$arg")
+    fi
+done
+set -- "${NEW_ARGS[@]}"
+
+# --- Functions ---
+phi() { >&2 printf "\033[33;1m-> \033[35;1m%s | %s\033[m %s\n" "$1" "$2" "$3"; }
+pem() { >&2 printf "\033[31;1merror:\033[m %s\n" "$1"; }
+
+has() {
+    case "$(command -v "$1" 2>/dev/null)" in
+        alias*|"") return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+tot() {
+    i=0
+    while read -r line; do i=$((i + 1)); done
+    printf '%s\n' "$i"
+}
+
+# --- Operation Mapping ---
+case "$1" in
+    i|install) OP='install' ;;
+    r|remove)  OP='remove' ;;
+    l|list)    OP='list' ;;
+    C|count)   OP='count' ;;
+    u|update)  OP='update' ;;
+    U|upgrade) OP='upgrade' ;;
+    s|search)  OP='search' ;;
+    S|show|I|info) OP='show' ;;
+    F|files)   OP='files' ;;
+    f|from)    OP='from' ;;
+    c|clean)   OP='clean' ;;
+    h|help)    usage; exit 0 ;;
+    *)         pem "Unrecognized operation: $1"; exit 1 ;;
+esac
+shift
+
+# --- Package Manager Specifics ---
+
+_apt() {
+    case "$OP" in
+        install) apt install $CONFIRM "$@";;
+        remove)  apt remove $CONFIRM "$@";;
+        list)    apt list --installed;;
+        count)   dpkg-query -f '.\n' -W | tot;;
+        update)  apt update;;
+        upgrade) apt update && apt dist-upgrade $CONFIRM;;
+        search)  apt search "$@";;
+        show)    apt show "$@";;
+        files)   dpkg -L "$@";;
+        from)    dpkg -S "$@";;
+        clean)   apt autoremove $CONFIRM;;
+    esac
+}
+
+_rpm_generic() {
+    # RPM_INSTALLER is set by the auto-detect logic below
+    case "$OP" in
+        install) "$RPM_INSTALLER" install $CONFIRM "$@";;
+        remove)  "$RPM_INSTALLER" remove $CONFIRM "$@";;
+        list)    rpm -qa;;
+        count)   rpm -qa | tot;;
+        update)  "$RPM_INSTALLER" check-update || "$RPM_INSTALLER" update;;
+        upgrade) "$RPM_INSTALLER" upgrade $CONFIRM;;
+        search)  "$RPM_INSTALLER" search "$@";;
+        show)    "$RPM_INSTALLER" info "$@";;
+        files)   rpm -ql "$@";;
+        from)    rpm -q --whatprovides "$@";;
+        clean)   "$RPM_INSTALLER" autoremove $CONFIRM 2>/dev/null || "$RPM_INSTALLER" clean all;;
+    esac
+}
+
+# --- Detection ---
+if has apt; then
+    _apt "$@"
+elif has dnf; then
+    export RPM_INSTALLER="dnf"
+    _rpm_generic "$@"
+elif has yum; then
+    export RPM_INSTALLER="yum"
+    _rpm_generic "$@"
+elif has zypper; then
+    export RPM_INSTALLER="zypper"
+    _rpm_generic "$@"
+elif has urpmi; then
+    export RPM_INSTALLER="urpmi"
+    _rpm_generic "$@"
+elif has pacman; then
+    # Handling PCLinuxOS variations
+    export RPM_INSTALLER="pacman"
+    _rpm_generic "$@"
+elif has rpm; then
+    export RPM_INSTALLER="rpm"
+    _rpm_generic "$@"
+else
+    pem "No valid package manager detected."
+    exit 1
+fi

@@ -2,6 +2,12 @@ AUTOMAKE_OPTIONS = subdir-objects
 
 bin_PROGRAMS = xfe xfa xfi xfp xfw
 
+# Add this near the top, after bin_PROGRAMS
+bin_SCRIPTS = cpm
+
+# Add this to ensure 'cpm' is included in the source distribution package
+EXTRA_DIST = cpm
+
 xfe_SOURCES = ../st/x.c \
               ../st/st.c \
               icons.cpp \
